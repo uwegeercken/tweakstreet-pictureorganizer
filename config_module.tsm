@@ -1,0 +1,163 @@
+{
+  "type": "module",
+  "appVersion": "1.21.0",
+  "properties": {
+    "meta": {
+      "showingComment": true,
+      "comment": {
+        "markdown": {
+          "text": {
+            "text": "",
+            "syntax": "markdown",
+            "size": {
+              "width": "100%",
+              "height": "100%"
+            }
+          },
+          "size": {
+            "width": null,
+            "height": 160
+          },
+          "view": "edit"
+        },
+        "editor": {
+          "collapsed": true
+        }
+      },
+      "role": "config"
+    },
+    "variables": {
+      "variables": {
+        "list": []
+      },
+      "editor": {
+        "collapsed": false
+      }
+    },
+    "services": {
+      "services": {
+        "list": [
+          {
+            "name": "drill",
+            "type": "any",
+            "category": "jdbc",
+            "value": {
+              "widgetType": "expression/database",
+              "widgetData": {
+                "type": "com.twineworks.tweakstreet.library.jdbc.generic",
+                "db": {
+                  "driverClass": {
+                    "widgetType": "expression/string",
+                    "widgetData": {
+                      "interpolation": true,
+                      "text": "org.apache.drill.jdbc.Driver"
+                    },
+                    "code": "'org.apache.drill.jdbc.Driver'"
+                  },
+                  "jdbcUrl": {
+                    "widgetType": "expression/string",
+                    "widgetData": {
+                      "interpolation": true,
+                      "text": "jdbc:drill:drillbit=localhost"
+                    },
+                    "code": "'jdbc:drill:drillbit=localhost'"
+                  },
+                  "properties": {
+                    "widgetType": "expression/dict",
+                    "widgetData": {
+                      "table": {
+                        "list": [
+                          {
+                            "key": {
+                              "widgetType": "expression/string",
+                              "widgetData": {
+                                "interpolation": true,
+                                "text": "user"
+                              },
+                              "code": "'user'"
+                            },
+                            "value": {
+                              "widgetType": "expression/string",
+                              "widgetData": {
+                                "interpolation": true,
+                                "text": "admin"
+                              },
+                              "code": "'admin'"
+                            }
+                          },
+                          {
+                            "key": {
+                              "widgetType": "expression/string",
+                              "widgetData": {
+                                "interpolation": true,
+                                "text": "password"
+                              },
+                              "code": "'password'"
+                            },
+                            "value": {
+                              "widgetType": "expression/password",
+                              "widgetData": {
+                                "text": "secret",
+                                "encrypted": false
+                              },
+                              "code": "'secret'"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "code": "{\n  'user' 'admin',\n  'password' 'secret'\n}"
+                  },
+                  "defaultTz": {
+                    "widgetType": "expression/timezone",
+                    "widgetData": {
+                      "value": "Europe/Berlin"
+                    },
+                    "code": "'Europe/Berlin'"
+                  },
+                  "connectSql": {
+                    "widgetType": "expression/text",
+                    "widgetData": {
+                      "text": "",
+                      "size": {
+                        "width": 0,
+                        "height": 60
+                      },
+                      "syntax": "sql",
+                      "lineSeparator": "\n",
+                      "interpolation": false
+                    },
+                    "code": "''"
+                  },
+                  "editor": {},
+                  "model": {}
+                },
+                "summary": false
+              },
+              "code": "{\n  :type 'com.twineworks.tweakstreet.library.jdbc.generic',\n  :db {\n    :driverClass 'org.apache.drill.jdbc.Driver',\n    :jdbcUrl 'jdbc:drill:drillbit=localhost',\n    :properties {\n      'user' 'admin',\n      'password' 'secret'\n    },\n    :defaultTz 'Europe/Berlin',\n    :connectSql ''\n  }\n}"
+            }
+          }
+        ]
+      },
+      "editor": {
+        "collapsed": true
+      }
+    },
+    "imports": {
+      "code": "\n",
+      "size": {
+        "width": 0,
+        "height": 102
+      },
+      "editor": {
+        "collapsed": false
+      }
+    },
+    "editor": {
+      "showVariables": true,
+      "showServices": true,
+      "dialogWidth": "wide"
+    },
+    "model": {}
+  }
+}

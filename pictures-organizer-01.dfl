@@ -1,0 +1,3598 @@
+{
+  "type": "data-flow",
+  "appVersion": "1.21.0",
+  "properties": {
+    "meta": {
+      "comment": {
+        "markdown": {
+          "text": {
+            "text": "### Flow to organize pictures into defined folders\n\nThe flow organizes pictures into folders according to the date when the picture was taken. Additionally, known reference dates are matched so that relevant pictures are output with a descriptive folder name.\n\nData is queried from an Apache Drill instance. Drill has a plugin to query the metadata of picture files of various formats.\n\nFrom the metadata of the pictures the date of when the shot was taken is extracted. It is then compared against reference dates in a separate files (in Json format). If a reference date matches the date when the picture was taken, the picture is output to a folder coresponding to the year the picture was taken plus the description and reference of the matched item.\n\nIf no reference matches the date the picture was taken, the picture is output to a folder corresponding to the year, month and day of month of the picture. If no date of when the picture was taken\ncan be extracted from the picture metadata, then the file system date of the picture is used.\n\nIf the fileOperation variable is set to 'move' and the moveOnlyFilesWithReferences variable is set to 'true', only files which have a match in the reference dates are moved to the output folder. All other files remain in the origin folder. This way one can incrementally add reference dates and\nrepeatedly run the flow to output the files until all files have a reference date. \n\nThe file date may come in different formats depending on the Aprache Drill settings and your local datetime format. The same might be true for the date from the picture metadata. You may need\nto adjust the queryFileDateTimePattern variable or the pictureMetadataDatePattern variable.\n\n__Note__: To run the dataflow, Apache Drill needs to be installed, configured and running. Drill itself also requires an instance of Apache Zookeeper running.",
+            "syntax": "markdown",
+            "size": {
+              "width": "100%",
+              "height": "100%"
+            }
+          },
+          "size": {
+            "width": null,
+            "height": 299
+          },
+          "view": "edit"
+        },
+        "editor": {
+          "collapsed": false
+        }
+      },
+      "showingComment": true
+    },
+    "editor": {
+      "showParameters": true,
+      "showVariables": true,
+      "showServices": true,
+      "dialogWidth": "stretch"
+    },
+    "imports": {
+      "code": "import core, data, strings, time, math, fun, locale, regex, bin, decimals from 'std';\nimport json from 'tweakstreet/json';",
+      "size": {
+        "width": 0,
+        "height": 66
+      },
+      "editor": {
+        "collapsed": false
+      }
+    },
+    "parameters": {
+      "parameters": {
+        "list": [
+          {
+            "name": "fileOperation",
+            "description": "How to handle files: move or copy",
+            "type": "any",
+            "defaultValue": {
+              "widgetType": "expression/string",
+              "widgetData": {
+                "interpolation": true,
+                "text": "copy"
+              },
+              "code": "'copy'"
+            }
+          },
+          {
+            "name": "moveOnlyFilesWithReferences",
+            "description": "If fileOperation is 'move', only those files are moved to the output folder which are matched against a reference date",
+            "type": "any",
+            "defaultValue": {
+              "widgetType": "expression/checkbox-boolean",
+              "widgetData": {
+                "value": true
+              },
+              "code": "true"
+            }
+          },
+          {
+            "name": "fileOperationTestMode",
+            "description": "Don't actually move or copy but run a test only",
+            "type": "any",
+            "defaultValue": {
+              "widgetType": "expression/checkbox-boolean",
+              "widgetData": {
+                "value": false
+              },
+              "code": "false"
+            }
+          },
+          {
+            "name": "fileOverwrite",
+            "description": "If files existing in the output folder should be overwritten",
+            "type": "any",
+            "defaultValue": {
+              "widgetType": "expression/checkbox-boolean",
+              "widgetData": {
+                "value": true
+              },
+              "code": "true"
+            }
+          },
+          {
+            "name": "outputFolderDatePartStructure",
+            "description": "Structure of the date part of the output folder: Possible values: \"year\" or \"yearmonth\"",
+            "type": "any",
+            "defaultValue": {
+              "widgetType": "expression/string",
+              "widgetData": {
+                "interpolation": true,
+                "text": "year"
+              },
+              "code": "'year'"
+            }
+          },
+          {
+            "name": "inputFolder",
+            "description": "Input folder for pictures",
+            "type": "any",
+            "defaultValue": {
+              "widgetType": "expression/string",
+              "widgetData": {
+                "interpolation": true,
+                "text": "dfs.images.`/2019/chris_in_hohn/*`"
+              },
+              "code": "'dfs.images.`/2019/chris_in_hohn/*`'"
+            }
+          },
+          {
+            "name": "outputFolder",
+            "description": "Output folder for pictures",
+            "type": "any",
+            "defaultValue": {
+              "widgetType": "expression/string",
+              "widgetData": {
+                "interpolation": true,
+                "text": "/home/uwe/pictures-organized"
+              },
+              "code": "'/home/uwe/pictures-organized'"
+            }
+          }
+        ]
+      },
+      "editor": {
+        "collapsed": false
+      }
+    },
+    "variables": {
+      "variables": {
+        "list": [
+          {
+            "name": "queryFileDateTimePattern",
+            "type": "any",
+            "value": {
+              "widgetType": "expression/string",
+              "widgetData": {
+                "interpolation": true,
+                "text": "E MMM dd HH:mm:ss xxx uuuu"
+              },
+              "code": "'E MMM dd HH:mm:ss xxx uuuu'"
+            }
+          },
+          {
+            "name": "pictureMetadataDatePattern",
+            "type": "any",
+            "value": {
+              "widgetType": "expression/string",
+              "widgetData": {
+                "interpolation": true,
+                "text": "uuuu:MM:dd HH:mm:ss[ZZZZZ]['@`'VV'`']"
+              },
+              "code": "'uuuu:MM:dd HH:mm:ss[ZZZZZ][''@`''VV''`'']'"
+            }
+          }
+        ]
+      },
+      "editor": {
+        "collapsed": false
+      }
+    },
+    "services": {
+      "services": {
+        "list": [
+          {
+            "name": "drill",
+            "type": "any",
+            "category": "jdbc",
+            "value": {
+              "widgetType": "expression/code",
+              "widgetData": {
+                "text": "$config.services.drill",
+                "size": {
+                  "width": 0,
+                  "height": 36
+                },
+                "syntax": "tweakflow"
+              },
+              "code": "$config.services.drill"
+            }
+          }
+        ]
+      },
+      "editor": {
+        "collapsed": false
+      }
+    }
+  },
+  "steps": [
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.input.sqlinput_003db0ee-991a-4676-ad4c-3f83f469e2ef",
+      "name": "SQL Input: Pictures folder",
+      "type": "com.twineworks.tweakstreet.library.steps.input.sqlinput",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "SQL Input: Pictures folder",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "tabs": {},
+        "connection": {
+          "widgetType": "expression/database-ref",
+          "widgetData": {
+            "name": "drill"
+          },
+          "code": "::flow.services.drill"
+        },
+        "fetchSize": {
+          "widgetType": "expression/number",
+          "widgetData": {
+            "text": "10000"
+          },
+          "code": "10000"
+        },
+        "rowLimit": {
+          "widgetType": "expression/nil",
+          "widgetData": {},
+          "code": "nil"
+        },
+        "query": {
+          "widgetType": "expression/code",
+          "widgetData": {
+            "text": "\"select FQN, FileName, FilePath, * from \" .. flow.params.inputFolder",
+            "size": {
+              "width": 0,
+              "height": 200
+            },
+            "syntax": "tweakflow"
+          },
+          "code": "\"select FQN, FileName, FilePath, * from \" .. flow.params.inputFolder"
+        },
+        "jdbcParams": {
+          "widgetType": "expression/list",
+          "widgetData": {
+            "table": {
+              "list": []
+            }
+          },
+          "code": "[]"
+        },
+        "readFields": {
+          "readFields": {
+            "list": [
+              {
+                "name": "FQN",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "FQN"
+                  },
+                  "code": "'FQN'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "FileName",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "FileName"
+                  },
+                  "code": "'FileName'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "FilePath",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "FilePath"
+                  },
+                  "code": "'FilePath'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "FileSize",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "FileSize"
+                  },
+                  "code": "'FileSize'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "FileDateTime",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "FileDateTime"
+                  },
+                  "code": "'FileDateTime'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "Format",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "Format"
+                  },
+                  "code": "'Format'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "PixelWidth",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "PixelWidth"
+                  },
+                  "code": "'PixelWidth'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "PixelHeight",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "PixelHeight"
+                  },
+                  "code": "'PixelHeight'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "Orientation",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "Orientation"
+                  },
+                  "code": "'Orientation'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "DPIWidth",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "DPIWidth"
+                  },
+                  "code": "'DPIWidth'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "DPIHeight",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "DPIHeight"
+                  },
+                  "code": "'DPIHeight'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "ColorMode",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "ColorMode"
+                  },
+                  "code": "'ColorMode'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "BitsPerPixel",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "BitsPerPixel"
+                  },
+                  "code": "'BitsPerPixel'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "HasAlpha",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "HasAlpha"
+                  },
+                  "code": "'HasAlpha'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "Duration",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "Duration"
+                  },
+                  "code": "'Duration'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "VideoCodec",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "VideoCodec"
+                  },
+                  "code": "'VideoCodec'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "FrameRate",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "FrameRate"
+                  },
+                  "code": "'FrameRate'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "AudioCodec",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "AudioCodec"
+                  },
+                  "code": "'AudioCodec'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "AudioSampleSize",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "AudioSampleSize"
+                  },
+                  "code": "'AudioSampleSize'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "AudioSampleRate",
+                "type": "string",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "AudioSampleRate"
+                  },
+                  "code": "'AudioSampleRate'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "JPEG",
+                "type": "any",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "JPEG"
+                  },
+                  "code": "'JPEG'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "ExifIFD0",
+                "type": "any",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "ExifIFD0"
+                  },
+                  "code": "'ExifIFD0'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "ExifSubIFD",
+                "type": "any",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "ExifSubIFD"
+                  },
+                  "code": "'ExifSubIFD'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "CanonMakernote",
+                "type": "any",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "CanonMakernote"
+                  },
+                  "code": "'CanonMakernote'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "Interoperability",
+                "type": "any",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "Interoperability"
+                  },
+                  "code": "'Interoperability'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "ExifThumbnail",
+                "type": "any",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "ExifThumbnail"
+                  },
+                  "code": "'ExifThumbnail'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "Huffman",
+                "type": "any",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "Huffman"
+                  },
+                  "code": "'Huffman'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              },
+              {
+                "name": "FileType",
+                "type": "any",
+                "mapping": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "FileType"
+                  },
+                  "code": "'FileType'"
+                },
+                "conversion": {
+                  "widgetType": "expression/nil",
+                  "widgetData": {},
+                  "code": "nil"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "resultVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "outputFields": {
+          "outputFields": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "editor": {
+          "showEntryVariables": true,
+          "showResultVariables": false,
+          "showOutputFields": false
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 138,
+        "y": 74
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.map.calculator_6fe201fa-cf16-48be-9fb7-2afe20a1ee29",
+      "name": "Calculator: Picture Taken",
+      "type": "com.twineworks.tweakstreet.library.steps.map.calculator",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Calculator: Picture Taken",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": [
+              {
+                "name": "pictureMetadataDateParser",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "time.parser(flow.vars.pictureMetadataDatePattern, default_tz: 'Europe/Berlin')",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "time.parser(flow.vars.pictureMetadataDatePattern, default_tz: 'Europe/Berlin')"
+                }
+              },
+              {
+                "name": "pictureDatetimeAsString",
+                "type": "string",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "in.ExifIFD0[:DateTime]",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "in.ExifIFD0[:DateTime]"
+                }
+              },
+              {
+                "name": "pictureDateTime",
+                "type": "datetime",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "pictureMetadataDateParser(pictureDatetimeAsString)",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "pictureMetadataDateParser(pictureDatetimeAsString)"
+                }
+              },
+              {
+                "name": "pictureTakenYear",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "time.year(entry_vars.pictureDateTime)",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "time.year(entry_vars.pictureDateTime)"
+                }
+              },
+              {
+                "name": "pictureTakenMonth",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "time.month(entry_vars.pictureDateTime)",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "time.month(entry_vars.pictureDateTime)"
+                }
+              },
+              {
+                "name": "pictureTakenDay",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "time.day_of_month(entry_vars.pictureDateTime)",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "time.day_of_month(entry_vars.pictureDateTime)"
+                }
+              },
+              {
+                "name": "fileSystemDateParser",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "time.parser(flow.vars.queryFileDateTimePattern, lang: \"de-DE\", default_tz: 'UTC')",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "time.parser(flow.vars.queryFileDateTimePattern, lang: \"de-DE\", default_tz: 'UTC')"
+                }
+              },
+              {
+                "name": "fileSystemDate",
+                "type": "datetime",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "fileSystemDateParser(in.FileDateTime)",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "fileSystemDateParser(in.FileDateTime)"
+                }
+              },
+              {
+                "name": "fileSystemTestdate",
+                "type": "datetime",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "fileSystemDateParser(\"Di. Dez. 31 00:36:18 +01:00 2019\")",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "fileSystemDateParser(\"Di. Dez. 31 00:36:18 +01:00 2019\")"
+                }
+              },
+              {
+                "name": "fileDateYear",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "time.year(fileSystemDate)",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "time.year(fileSystemDate)"
+                }
+              },
+              {
+                "name": "fileDateMonth",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "time.month(fileSystemDate)",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "time.month(fileSystemDate)"
+                }
+              },
+              {
+                "name": "fileDateDay",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "time.day_of_month(fileSystemDate)",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "time.day_of_month(fileSystemDate)"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "outputFields": {
+          "outputFields": {
+            "list": [
+              {
+                "name": "pictureYear",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "if entry_vars.pictureTakenYear != nil then entry_vars.pictureTakenYear else entry_vars.fileDateYear",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "if entry_vars.pictureTakenYear != nil then entry_vars.pictureTakenYear else entry_vars.fileDateYear"
+                }
+              },
+              {
+                "name": "pictureMonth",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "if entry_vars.pictureTakenYear != nil then entry_vars.pictureTakenMonth else entry_vars.fileDateMonth",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "if entry_vars.pictureTakenYear != nil then entry_vars.pictureTakenMonth else entry_vars.fileDateMonth"
+                }
+              },
+              {
+                "name": "pictureDay",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "if entry_vars.pictureTakenYear != nil then entry_vars.pictureTakenDay else entry_vars.fileDateDay",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "if entry_vars.pictureTakenYear != nil then entry_vars.pictureTakenDay else entry_vars.fileDateDay"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "editor": {
+          "showEntryVariables": true,
+          "showOutputFields": true,
+          "dialogWidth": "wide"
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 394,
+        "y": 234
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.map.clock_c9a5ba79-3561-4d17-bbc5-ace2a03df604",
+      "name": "Clock: local Datetime",
+      "type": "com.twineworks.tweakstreet.library.steps.map.clock",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Clock: local Datetime",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "resultVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "outputFields": {
+          "outputFields": {
+            "list": [
+              {
+                "name": "localDatetime",
+                "type": "datetime",
+                "value": {
+                  "widgetType": "expression/result-ref",
+                  "widgetData": {
+                    "value": "::results.local"
+                  },
+                  "code": "::results.local"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "editor": {
+          "showEntryVariables": false,
+          "showResultVariables": false,
+          "showOutputFields": true
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 394,
+        "y": 74
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.map.calculator_fd924a61-06bc-4d28-aeac-823d6965b867",
+      "name": "Calculator: filename by date",
+      "type": "com.twineworks.tweakstreet.library.steps.map.calculator",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Calculator: filename by date",
+          "showingComment": true,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "### Filename for files with references\n\nThe target folder is constructed by combining:\n- output folder from flow variable\n- the year the picture was taken\n- the month the picture was taken\n- the day of month the picture was taken\n",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "split"
+            },
+            "editor": {
+              "collapsed": false
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": [
+              {
+                "name": "adjustedPictureMonth",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "if in.pictureMonth < 10 then '0' .. in.pictureMonth else in.pictureMonth",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "if in.pictureMonth < 10 then '0' .. in.pictureMonth else in.pictureMonth"
+                }
+              },
+              {
+                "name": "adjustedPictureDay",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "if in.pictureDay < 10 then '0' .. in.pictureDay else in.pictureDay",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "if in.pictureDay < 10 then '0' .. in.pictureDay else in.pictureDay"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "outputFields": {
+          "outputFields": {
+            "list": [
+              {
+                "name": "outputFileFullName",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "flow.params.outputFolder .. \"/\" .. in.pictureYear .. \"/\" .. entry_vars.adjustedPictureMonth .. \"/\" .. entry_vars.adjustedPictureDay .. \"/\" .. in.FileName",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "flow.params.outputFolder .. \"/\" .. in.pictureYear .. \"/\" .. entry_vars.adjustedPictureMonth .. \"/\" .. entry_vars.adjustedPictureDay .. \"/\" .. in.FileName"
+                }
+              },
+              {
+                "name": "filenameByReference",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/checkbox-boolean",
+                  "widgetData": {
+                    "value": false
+                  },
+                  "code": "false"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "editor": {
+          "showEntryVariables": true,
+          "showOutputFields": true,
+          "dialogWidth": "stretch"
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 1482,
+        "y": 458
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.map.pickfields_47d94561-12f6-46b0-a0a4-df7e6e1686b7",
+      "name": "Pick Fields",
+      "type": "com.twineworks.tweakstreet.library.steps.map.pickfields",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Pick Fields",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "mode": {
+          "value": "whitelist"
+        },
+        "fieldRefs": {
+          "fieldRefs": {
+            "list": [
+              {
+                "field": {
+                  "value": {
+                    "gate": "in",
+                    "name": "FQN"
+                  }
+                }
+              },
+              {
+                "field": {
+                  "value": {
+                    "gate": "in",
+                    "name": "FileName"
+                  }
+                }
+              },
+              {
+                "field": {
+                  "value": {
+                    "gate": "in",
+                    "name": "FilePath"
+                  }
+                }
+              },
+              {
+                "field": {
+                  "value": {
+                    "gate": "in",
+                    "name": "FileSize"
+                  }
+                }
+              },
+              {
+                "field": {
+                  "value": {
+                    "gate": "in",
+                    "name": "FileDateTime"
+                  }
+                }
+              },
+              {
+                "field": {
+                  "value": {
+                    "gate": "in",
+                    "name": "ExifIFD0"
+                  }
+                }
+              },
+              {
+                "field": {
+                  "value": {
+                    "gate": "in",
+                    "name": "FileType"
+                  }
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "editor": {},
+        "model": {}
+      },
+      "pos": {
+        "x": 138,
+        "y": 234
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.map.copyfiles_a37bb144-9bd0-45e5-b2ad-cce36c710332",
+      "name": "Copy Files",
+      "type": "com.twineworks.tweakstreet.library.steps.map.copyfiles",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Copy Files",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "srcFs": {
+          "widgetType": "expression/storage-ref",
+          "widgetData": {
+            "name": ""
+          },
+          "code": "nil"
+        },
+        "srcPath": {
+          "widgetType": "expression/code",
+          "widgetData": {
+            "text": "in.FQN",
+            "size": {
+              "width": 0,
+              "height": 36
+            },
+            "syntax": "tweakflow"
+          },
+          "code": "in.FQN"
+        },
+        "pattern": {
+          "widgetType": "expression/string",
+          "widgetData": {
+            "interpolation": true,
+            "text": ""
+          },
+          "code": "''"
+        },
+        "dstFs": {
+          "widgetType": "expression/storage-ref",
+          "widgetData": {
+            "name": ""
+          },
+          "code": "nil"
+        },
+        "dstType": {
+          "widgetType": "expression/select",
+          "widgetData": {
+            "family": "com.twineworks.tweakstreet.library.steps.map.copyfiles/dstType",
+            "value": "path"
+          },
+          "code": "'path'"
+        },
+        "dstPath": {
+          "widgetType": "expression/code",
+          "widgetData": {
+            "text": "in.outputFileFullName",
+            "size": {
+              "width": 0,
+              "height": 36
+            },
+            "syntax": "tweakflow"
+          },
+          "code": "in.outputFileFullName"
+        },
+        "ifExists": {
+          "widgetType": "expression/code",
+          "widgetData": {
+            "text": "if flow.params.fileOverwrite then 'replace' else 'error'",
+            "size": {
+              "width": 0,
+              "height": 36
+            },
+            "syntax": "tweakflow"
+          },
+          "code": "if flow.params.fileOverwrite then 'replace' else 'error'"
+        },
+        "testMode": {
+          "widgetType": "expression/code",
+          "widgetData": {
+            "text": "flow.params.fileOperationTestMode",
+            "size": {
+              "width": 0,
+              "height": 36
+            },
+            "syntax": "tweakflow"
+          },
+          "code": "flow.params.fileOperationTestMode"
+        },
+        "editor": {
+          "showEntryVariables": false
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 1482,
+        "y": 74
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.map.readfile_196a1215-3056-4965-9b55-dd3e2ecfb210",
+      "name": "Read File: Reference Dates",
+      "type": "com.twineworks.tweakstreet.library.steps.map.readfile",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Read File: Reference Dates",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "fs": {
+          "widgetType": "expression/storage-ref",
+          "widgetData": {
+            "name": ""
+          },
+          "code": "nil"
+        },
+        "path": {
+          "widgetType": "expression/local-file",
+          "widgetData": {
+            "interpolation": true,
+            "text": "./dates.json",
+            "dialogIntent": "openFile"
+          },
+          "code": "'./dates.json'"
+        },
+        "compression": {
+          "widgetType": "expression/select",
+          "widgetData": {
+            "family": "expression/select/compression",
+            "value": "none"
+          },
+          "code": "'none'"
+        },
+        "charset": {
+          "widgetType": "expression/charset",
+          "widgetData": {
+            "value": "UTF-8"
+          },
+          "code": "'UTF-8'"
+        },
+        "textFileContent": {
+          "text": "",
+          "fetchButton": {
+            "value": "100"
+          },
+          "size": {
+            "width": 0,
+            "height": 180
+          },
+          "editor": {
+            "collapsed": true
+          }
+        },
+        "resultVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "outputFields": {
+          "outputFields": {
+            "list": [
+              {
+                "name": "payload",
+                "type": "string",
+                "value": {
+                  "widgetType": "expression/result-ref",
+                  "widgetData": {
+                    "value": "::results.content"
+                  },
+                  "code": "::results.content"
+                }
+              },
+              {
+                "name": "dates",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "json.parse(payload)[:dates]",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "json.parse(payload)[:dates]"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "editor": {
+          "showEntryVariables": false,
+          "showResultVariables": false,
+          "showOutputFields": true
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 906,
+        "y": 650
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.flatmap.getitems_8607f921-3996-45aa-8415-780d5c14a2a6",
+      "name": "List to Rows: items",
+      "type": "com.twineworks.tweakstreet.library.steps.flatmap.getitems",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "List to Rows: items",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "items": {
+          "widgetType": "expression/field-value-ref",
+          "widgetData": {
+            "fieldSelect": {
+              "value": {
+                "gate": "in",
+                "name": "dates"
+              }
+            }
+          },
+          "code": "::in.dates"
+        },
+        "resultVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "outputFields": {
+          "outputFields": {
+            "list": [
+              {
+                "name": "item_nr",
+                "type": "long",
+                "value": {
+                  "widgetType": "expression/result-ref",
+                  "widgetData": {
+                    "value": "::results.item_nr"
+                  },
+                  "code": "::results.item_nr"
+                }
+              },
+              {
+                "name": "item_count",
+                "type": "long",
+                "value": {
+                  "widgetType": "expression/result-ref",
+                  "widgetData": {
+                    "value": "::results.item_count"
+                  },
+                  "code": "::results.item_count"
+                }
+              },
+              {
+                "name": "item",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/result-ref",
+                  "widgetData": {
+                    "value": "::results.item"
+                  },
+                  "code": "::results.item"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "editor": {
+          "showEntryVariables": false,
+          "showResultVariables": false,
+          "showOutputFields": true
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 650,
+        "y": 650
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.map.calculator_fe96a233-4c66-47ab-a3e5-d17c247825d8",
+      "name": "Calculator: Reference Dates",
+      "type": "com.twineworks.tweakstreet.library.steps.map.calculator",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Calculator: Reference Dates",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": [
+              {
+                "name": "dateParser",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "time.parser(\"uuuu-MM-dd\", default_tz: 'Europe/Berlin')",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "time.parser(\"uuuu-MM-dd\", default_tz: 'Europe/Berlin')"
+                }
+              },
+              {
+                "name": "referenceDate",
+                "type": "datetime",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "dateParser(in.referenceDate)",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "dateParser(in.referenceDate)"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "outputFields": {
+          "outputFields": {
+            "list": [
+              {
+                "name": "referenceDateYear",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "time.year(entry_vars.referenceDate)",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "time.year(entry_vars.referenceDate)"
+                }
+              },
+              {
+                "name": "referenceDateMonth",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "time.month(entry_vars.referenceDate)",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "time.month(entry_vars.referenceDate)"
+                }
+              },
+              {
+                "name": "referenceDateDay",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "time.day_of_month(entry_vars.referenceDate)",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "time.day_of_month(entry_vars.referenceDate)"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "editor": {
+          "showEntryVariables": true,
+          "showOutputFields": true
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 394,
+        "y": 458
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.bool.filter_75977828-e452-4085-a006-e9cb193b623f",
+      "name": "Filter: yearly repeating reference",
+      "type": "com.twineworks.tweakstreet.library.steps.bool.filter",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Filter: yearly repeating reference",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "condition": {
+          "widgetType": "expression/code",
+          "widgetData": {
+            "text": "in.item[:type] == \"repeating\"",
+            "size": {
+              "width": 0,
+              "height": 36
+            },
+            "syntax": "tweakflow"
+          },
+          "code": "in.item[:type] == \"repeating\""
+        },
+        "editor": {
+          "showEntryVariables": false
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 650,
+        "y": 458
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.streamlookup.streamlookup_0a6d6521-9640-41c3-9487-4c76fb01080c",
+      "name": "Stream Lookup: year, month, day",
+      "type": "com.twineworks.tweakstreet.library.steps.streamlookup.streamlookup",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Stream Lookup: year, month, day",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "keyFields": {
+          "fieldPairs": {
+            "list": [
+              {
+                "left": {
+                  "value": {
+                    "gate": "in",
+                    "name": "pictureYear"
+                  }
+                },
+                "right": {
+                  "value": {
+                    "gate": "lookup",
+                    "name": "referenceDateYear"
+                  }
+                }
+              },
+              {
+                "left": {
+                  "value": {
+                    "gate": "in",
+                    "name": "pictureMonth"
+                  }
+                },
+                "right": {
+                  "value": {
+                    "gate": "lookup",
+                    "name": "referenceDateMonth"
+                  }
+                }
+              },
+              {
+                "left": {
+                  "value": {
+                    "gate": "in",
+                    "name": "pictureDay"
+                  }
+                },
+                "right": {
+                  "value": {
+                    "gate": "lookup",
+                    "name": "referenceDateDay"
+                  }
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "resultVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "outputFields": {
+          "outputFields": {
+            "list": [
+              {
+                "name": "item",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "results.lookup[:item] default nil",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "results.lookup[:item] default nil"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "fetchFields": {
+          "value": "lookup_"
+        },
+        "editor": {
+          "showEntryVariables": false,
+          "showResultVariables": false,
+          "showOutputFields": true
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 650,
+        "y": 234
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.streamlookup.streamlookup_7f4a575a-8d9c-47ee-8e8f-b2dff0bcfe89",
+      "name": "Stream Lookup: month, day",
+      "type": "com.twineworks.tweakstreet.library.steps.streamlookup.streamlookup",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Stream Lookup: month, day",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "keyFields": {
+          "fieldPairs": {
+            "list": [
+              {
+                "left": {
+                  "value": {
+                    "gate": "in",
+                    "name": "pictureMonth"
+                  }
+                },
+                "right": {
+                  "value": {
+                    "gate": "lookup",
+                    "name": "referenceDateMonth"
+                  }
+                }
+              },
+              {
+                "left": {
+                  "value": {
+                    "gate": "in",
+                    "name": "pictureDay"
+                  }
+                },
+                "right": {
+                  "value": {
+                    "gate": "lookup",
+                    "name": "referenceDateDay"
+                  }
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "resultVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "outputFields": {
+          "outputFields": {
+            "list": [
+              {
+                "name": "item",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "results.lookup[:item] default nil",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "results.lookup[:item] default nil"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "fetchFields": {
+          "value": "lookup_"
+        },
+        "editor": {
+          "showEntryVariables": false,
+          "showResultVariables": false,
+          "showOutputFields": true
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 906,
+        "y": 458
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.bool.filter_046c8cf1-da71-4f34-b742-2c0bd8cc9350",
+      "name": "Filter: date reference present",
+      "type": "com.twineworks.tweakstreet.library.steps.bool.filter",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Filter: date reference present",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "condition": {
+          "widgetType": "expression/code",
+          "widgetData": {
+            "text": "in.item != nil",
+            "size": {
+              "width": 0,
+              "height": 36
+            },
+            "syntax": "tweakflow"
+          },
+          "code": "in.item != nil"
+        },
+        "editor": {
+          "showEntryVariables": false
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 906,
+        "y": 234
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.bool.filter_2f8a3096-f68d-405e-8469-5bd99469ed62",
+      "name": "Filter: month an day reference present",
+      "type": "com.twineworks.tweakstreet.library.steps.bool.filter",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Filter: month an day reference present",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "condition": {
+          "widgetType": "expression/code",
+          "widgetData": {
+            "text": "in.item != nil",
+            "size": {
+              "width": 0,
+              "height": 36
+            },
+            "syntax": "tweakflow"
+          },
+          "code": "in.item != nil"
+        },
+        "editor": {
+          "showEntryVariables": false
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 1194,
+        "y": 458
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.map.calculator_9e30c278-f7e1-4264-a868-706029d046ea",
+      "name": "Calculator: filename by reference",
+      "type": "com.twineworks.tweakstreet.library.steps.map.calculator",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Calculator: filename by reference",
+          "showingComment": true,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "### Filename for files with references\n\nThe target folder is constructed by combining:\n- output folder from flow variable\n- the year the picture was taken\n- the description attrbiute of the reference\n\n",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "split"
+            },
+            "editor": {
+              "collapsed": false
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": [
+              {
+                "name": "adjustedPictureMonth",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "if in.pictureMonth < 10 then '0' .. in.pictureMonth else in.pictureMonth",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "if in.pictureMonth < 10 then '0' .. in.pictureMonth else in.pictureMonth"
+                }
+              },
+              {
+                "name": "datePart",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "if flow.params.outputFolderDatePartStructure == \"yearmonth\" then in.pictureYear .. \"/\" .. adjustedPictureMonth else in.pictureYear ",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "if flow.params.outputFolderDatePartStructure == \"yearmonth\" then in.pictureYear .. \"/\" .. adjustedPictureMonth else in.pictureYear"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "outputFields": {
+          "outputFields": {
+            "list": [
+              {
+                "name": "outputFileFullName",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "flow.params.outputFolder .. \"/\" .. entry_vars.datePart .. \"/\" .. in.item[:description] .. \"/\" .. in.FileName",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "flow.params.outputFolder .. \"/\" .. entry_vars.datePart .. \"/\" .. in.item[:description] .. \"/\" .. in.FileName"
+                }
+              },
+              {
+                "name": "filenameByReference",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/checkbox-boolean",
+                  "widgetData": {
+                    "value": true
+                  },
+                  "code": "true"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "editor": {
+          "showEntryVariables": true,
+          "showOutputFields": true,
+          "dialogWidth": "stretch"
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 1194,
+        "y": 234
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.map.movefiles_d2287f16-211c-49b5-bc57-6ec46f4464c6",
+      "name": "Move Files",
+      "type": "com.twineworks.tweakstreet.library.steps.map.movefiles",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Move Files",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "srcFs": {
+          "widgetType": "expression/storage-ref",
+          "widgetData": {
+            "name": ""
+          },
+          "code": "nil"
+        },
+        "srcPath": {
+          "widgetType": "expression/code",
+          "widgetData": {
+            "text": "in.FQN",
+            "size": {
+              "width": 0,
+              "height": 36
+            },
+            "syntax": "tweakflow"
+          },
+          "code": "in.FQN"
+        },
+        "pattern": {
+          "widgetType": "expression/string",
+          "widgetData": {
+            "interpolation": true,
+            "text": ""
+          },
+          "code": "''"
+        },
+        "dstFs": {
+          "widgetType": "expression/storage-ref",
+          "widgetData": {
+            "name": ""
+          },
+          "code": "nil"
+        },
+        "dstType": {
+          "widgetType": "expression/select",
+          "widgetData": {
+            "family": "com.twineworks.tweakstreet.library.steps.map.movefiles/dstType",
+            "value": "folder"
+          },
+          "code": "'folder'"
+        },
+        "dstPath": {
+          "widgetType": "expression/code",
+          "widgetData": {
+            "text": "in.outputFileFullName",
+            "size": {
+              "width": 0,
+              "height": 36
+            },
+            "syntax": "tweakflow"
+          },
+          "code": "in.outputFileFullName"
+        },
+        "ifExists": {
+          "widgetType": "expression/code",
+          "widgetData": {
+            "text": "if flow.params.fileOverwrite then 'replace' else 'error'",
+            "size": {
+              "width": 0,
+              "height": 36
+            },
+            "syntax": "tweakflow"
+          },
+          "code": "if flow.params.fileOverwrite then 'replace' else 'error'"
+        },
+        "testMode": {
+          "widgetType": "expression/code",
+          "widgetData": {
+            "text": "flow.params.fileOperationTestMode",
+            "size": {
+              "width": 0,
+              "height": 36
+            },
+            "syntax": "tweakflow"
+          },
+          "code": "flow.params.fileOperationTestMode"
+        },
+        "editor": {
+          "showEntryVariables": false
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 1866,
+        "y": 234
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.bool.filter_996973ff-510e-4915-a268-c4ada982efa1",
+      "name": "Filter: move files",
+      "type": "com.twineworks.tweakstreet.library.steps.bool.filter",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Filter: move files",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "condition": {
+          "widgetType": "expression/code",
+          "widgetData": {
+            "text": "flow.params.fileOperation != \"copy\"",
+            "size": {
+              "width": 0,
+              "height": 36
+            },
+            "syntax": "tweakflow"
+          },
+          "code": "flow.params.fileOperation != \"copy\""
+        },
+        "editor": {
+          "showEntryVariables": false
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 1482,
+        "y": 234
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.flatmap.getitems_f0b3d8ef-58ee-4385-9c50-d476aaadd096",
+      "name": "List to Rows: Reference Dates",
+      "type": "com.twineworks.tweakstreet.library.steps.flatmap.getitems",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "List to Rows: Reference Dates",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "items": {
+          "widgetType": "expression/code",
+          "widgetData": {
+            "text": "in.item[:date]",
+            "size": {
+              "width": 0,
+              "height": 36
+            },
+            "syntax": "tweakflow"
+          },
+          "code": "in.item[:date]"
+        },
+        "resultVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "outputFields": {
+          "outputFields": {
+            "list": [
+              {
+                "name": "referenceDate",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/result-ref",
+                  "widgetData": {
+                    "value": "::results.item"
+                  },
+                  "code": "::results.item"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "editor": {
+          "showEntryVariables": false,
+          "showResultVariables": false,
+          "showOutputFields": true
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 138,
+        "y": 458
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.bool.filter_2bf50958-3e4c-44b8-8ca8-5fc041cbd6e2",
+      "name": "Filter: is date range",
+      "type": "com.twineworks.tweakstreet.library.steps.bool.filter",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Filter: is date range",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "condition": {
+          "widgetType": "expression/code",
+          "widgetData": {
+            "text": "in.item[:date_end]",
+            "size": {
+              "width": 0,
+              "height": 36
+            },
+            "syntax": "tweakflow"
+          },
+          "code": "in.item[:date_end]"
+        },
+        "editor": {
+          "showEntryVariables": false
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 394,
+        "y": 650
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.map.calculator_c9c61b99-ba1b-42bd-9c9b-4604a6b70f7a",
+      "name": "Calculator: Reference Date Range",
+      "type": "com.twineworks.tweakstreet.library.steps.map.calculator",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Calculator: Reference Date Range",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": [
+              {
+                "name": "datePattern",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/string",
+                  "widgetData": {
+                    "interpolation": true,
+                    "text": "uuuu-MM-dd"
+                  },
+                  "code": "'uuuu-MM-dd'"
+                }
+              },
+              {
+                "name": "dateParser",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "time.parser(datePattern, default_tz: 'Europe/Berlin')",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "time.parser(datePattern, default_tz: 'Europe/Berlin')"
+                }
+              },
+              {
+                "name": "dateFormatter",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "time.formatter(datePattern)",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "time.formatter(datePattern)"
+                }
+              },
+              {
+                "name": "startDate",
+                "type": "datetime",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "dateParser(in.item[:date][0])",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "dateParser(in.item[:date][0])"
+                }
+              },
+              {
+                "name": "endDate",
+                "type": "datetime",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "dateParser(in.item[:date_end])",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "dateParser(in.item[:date_end])"
+                }
+              },
+              {
+                "name": "numberOfDays",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "time.days_between(startDate, endDate)",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "time.days_between(startDate, endDate)"
+                }
+              },
+              {
+                "name": "dates",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "for\n  days <- data.range(0, entry_vars.numberOfDays),\n  d: time.add_period(entry_vars.startDate,0,0,days),\n  d <= entry_vars.endDate,\n  entry_vars.dateFormatter(d)\n",
+                    "size": {
+                      "width": 0,
+                      "height": 155
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "(for\n  days <- data.range(0, entry_vars.numberOfDays),\n  d: time.add_period(entry_vars.startDate,0,0,days),\n  d <= entry_vars.endDate,\n  entry_vars.dateFormatter(d))"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "outputFields": {
+          "outputFields": {
+            "list": [
+              {
+                "name": "item",
+                "type": "any",
+                "value": {
+                  "widgetType": "expression/code",
+                  "widgetData": {
+                    "text": "data.put(in.item, \"date\", entry_vars.dates)",
+                    "size": {
+                      "width": 0,
+                      "height": 36
+                    },
+                    "syntax": "tweakflow"
+                  },
+                  "code": "data.put(in.item, \"date\", entry_vars.dates)"
+                }
+              }
+            ]
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "editor": {
+          "showEntryVariables": true,
+          "showOutputFields": true
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 138,
+        "y": 650
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.bool.filter_d96cd101-17b1-4f9b-b6fa-94390d92196b",
+      "name": "Filter: reference files",
+      "type": "com.twineworks.tweakstreet.library.steps.bool.filter",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Filter: reference files",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "entryVariables": {
+          "variables": {
+            "list": []
+          },
+          "editor": {
+            "collapsed": false
+          }
+        },
+        "condition": {
+          "widgetType": "expression/code",
+          "widgetData": {
+            "text": "(flow.params.moveOnlyFilesWithReferences && in.filenameByReference) || (!flow.params.moveOnlyFilesWithReferences)",
+            "size": {
+              "width": 0,
+              "height": 36
+            },
+            "syntax": "tweakflow"
+          },
+          "code": "(flow.params.moveOnlyFilesWithReferences && in.filenameByReference) || (!flow.params.moveOnlyFilesWithReferences)"
+        },
+        "editor": {
+          "showEntryVariables": false
+        },
+        "model": {}
+      },
+      "pos": {
+        "x": 1706,
+        "y": 234
+      }
+    },
+    {
+      "id": "com.twineworks.tweakstreet.library.steps.map.dummy_81d91015-838a-4443-899f-dd33c9938bb1",
+      "name": "Dummy: file not moved",
+      "type": "com.twineworks.tweakstreet.library.steps.map.dummy",
+      "instanceCount": {
+        "widgetType": "expression/number",
+        "widgetData": {
+          "text": "1"
+        },
+        "code": "1"
+      },
+      "data": {
+        "meta": {
+          "name": "Dummy: file not moved",
+          "showingComment": false,
+          "comment": {
+            "markdown": {
+              "text": {
+                "text": "",
+                "syntax": "markdown",
+                "size": {
+                  "width": "100%",
+                  "height": "100%"
+                }
+              },
+              "size": {
+                "width": null,
+                "height": 160
+              },
+              "view": "edit"
+            },
+            "editor": {
+              "collapsed": true
+            }
+          }
+        },
+        "editor": {},
+        "model": {}
+      },
+      "pos": {
+        "x": 1706,
+        "y": 458
+      }
+    }
+  ],
+  "hops": [
+    {
+      "id": "b661113e-b1ca-4355-9f30-6e2a1fc84619",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.map.clock_c9a5ba79-3561-4d17-bbc5-ace2a03df604",
+      "toStep": "com.twineworks.tweakstreet.library.steps.map.calculator_6fe201fa-cf16-48be-9fb7-2afe20a1ee29",
+      "fromGate": "out",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "806bf772-9155-48d1-9b19-99065e0a1666",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.input.sqlinput_003db0ee-991a-4676-ad4c-3f83f469e2ef",
+      "toStep": "com.twineworks.tweakstreet.library.steps.map.pickfields_47d94561-12f6-46b0-a0a4-df7e6e1686b7",
+      "fromGate": "out",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "800c2699-6f97-4dcb-9825-c6a96058b41c",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.map.pickfields_47d94561-12f6-46b0-a0a4-df7e6e1686b7",
+      "toStep": "com.twineworks.tweakstreet.library.steps.map.clock_c9a5ba79-3561-4d17-bbc5-ace2a03df604",
+      "fromGate": "out",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "93aa64a6-7450-476b-908c-5942ac4b35fc",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.map.readfile_196a1215-3056-4965-9b55-dd3e2ecfb210",
+      "toStep": "com.twineworks.tweakstreet.library.steps.flatmap.getitems_8607f921-3996-45aa-8415-780d5c14a2a6",
+      "fromGate": "out",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "34916f1b-4573-4198-aa61-fac9ddc7ef26",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.map.calculator_fe96a233-4c66-47ab-a3e5-d17c247825d8",
+      "toStep": "com.twineworks.tweakstreet.library.steps.bool.filter_75977828-e452-4085-a006-e9cb193b623f",
+      "fromGate": "out",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "0b5b33f9-39aa-4be5-8d16-598ce957d915",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.streamlookup.streamlookup_0a6d6521-9640-41c3-9487-4c76fb01080c",
+      "toStep": "com.twineworks.tweakstreet.library.steps.bool.filter_046c8cf1-da71-4f34-b742-2c0bd8cc9350",
+      "fromGate": "out",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "46d04c96-3e6e-427e-a97b-c09b63f17abb",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.bool.filter_046c8cf1-da71-4f34-b742-2c0bd8cc9350",
+      "toStep": "com.twineworks.tweakstreet.library.steps.streamlookup.streamlookup_7f4a575a-8d9c-47ee-8e8f-b2dff0bcfe89",
+      "fromGate": "no",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "016f66a2-22a5-443b-85f9-7906f484bce7",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.bool.filter_2f8a3096-f68d-405e-8469-5bd99469ed62",
+      "toStep": "com.twineworks.tweakstreet.library.steps.map.calculator_fd924a61-06bc-4d28-aeac-823d6965b867",
+      "fromGate": "no",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "cb41ca09-c4d9-4b6d-aa9b-5af346ecdb6f",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.bool.filter_2f8a3096-f68d-405e-8469-5bd99469ed62",
+      "toStep": "com.twineworks.tweakstreet.library.steps.map.calculator_9e30c278-f7e1-4264-a868-706029d046ea",
+      "fromGate": "yes",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "22459f68-25b0-4685-a639-8ec5ff84af35",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.streamlookup.streamlookup_7f4a575a-8d9c-47ee-8e8f-b2dff0bcfe89",
+      "toStep": "com.twineworks.tweakstreet.library.steps.bool.filter_2f8a3096-f68d-405e-8469-5bd99469ed62",
+      "fromGate": "out",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "a810a4e6-496b-4e59-a464-3d79260ce4ed",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.bool.filter_046c8cf1-da71-4f34-b742-2c0bd8cc9350",
+      "toStep": "com.twineworks.tweakstreet.library.steps.map.calculator_9e30c278-f7e1-4264-a868-706029d046ea",
+      "fromGate": "yes",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "454ea698-bfa6-4050-bcd7-836baff96a69",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.map.calculator_9e30c278-f7e1-4264-a868-706029d046ea",
+      "toStep": "com.twineworks.tweakstreet.library.steps.bool.filter_996973ff-510e-4915-a268-c4ada982efa1",
+      "fromGate": "out",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "f6c78642-dfaf-4afc-860e-94871068de66",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.map.calculator_fd924a61-06bc-4d28-aeac-823d6965b867",
+      "toStep": "com.twineworks.tweakstreet.library.steps.bool.filter_996973ff-510e-4915-a268-c4ada982efa1",
+      "fromGate": "out",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "24814d64-b795-4124-a9a9-d0a5931af4a1",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.bool.filter_996973ff-510e-4915-a268-c4ada982efa1",
+      "toStep": "com.twineworks.tweakstreet.library.steps.map.copyfiles_a37bb144-9bd0-45e5-b2ad-cce36c710332",
+      "fromGate": "no",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "c70fca79-139f-47bc-8bb5-da0d5a1a65e0",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.flatmap.getitems_f0b3d8ef-58ee-4385-9c50-d476aaadd096",
+      "toStep": "com.twineworks.tweakstreet.library.steps.map.calculator_fe96a233-4c66-47ab-a3e5-d17c247825d8",
+      "fromGate": "out",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "9866628d-c254-4719-a51e-3abace6750f6",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.bool.filter_75977828-e452-4085-a006-e9cb193b623f",
+      "toStep": "com.twineworks.tweakstreet.library.steps.streamlookup.streamlookup_7f4a575a-8d9c-47ee-8e8f-b2dff0bcfe89",
+      "fromGate": "yes",
+      "toGate": "lookup",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "598c63f3-c844-4325-8daf-6a6f1379a006",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.bool.filter_75977828-e452-4085-a006-e9cb193b623f",
+      "toStep": "com.twineworks.tweakstreet.library.steps.streamlookup.streamlookup_0a6d6521-9640-41c3-9487-4c76fb01080c",
+      "fromGate": "no",
+      "toGate": "lookup",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "919d4e66-2453-4601-bde6-6523fbb64aa9",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.map.calculator_6fe201fa-cf16-48be-9fb7-2afe20a1ee29",
+      "toStep": "com.twineworks.tweakstreet.library.steps.streamlookup.streamlookup_0a6d6521-9640-41c3-9487-4c76fb01080c",
+      "fromGate": "out",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "0bb944aa-56a1-4360-86a8-7f776146c9c8",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.flatmap.getitems_8607f921-3996-45aa-8415-780d5c14a2a6",
+      "toStep": "com.twineworks.tweakstreet.library.steps.bool.filter_2bf50958-3e4c-44b8-8ca8-5fc041cbd6e2",
+      "fromGate": "out",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "cc6a7016-96e4-4c3f-be66-5096ea362777",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.bool.filter_2bf50958-3e4c-44b8-8ca8-5fc041cbd6e2",
+      "toStep": "com.twineworks.tweakstreet.library.steps.flatmap.getitems_f0b3d8ef-58ee-4385-9c50-d476aaadd096",
+      "fromGate": "no",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "06cf1cf1-96a5-4f75-9520-dce54e6136e2",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.bool.filter_2bf50958-3e4c-44b8-8ca8-5fc041cbd6e2",
+      "toStep": "com.twineworks.tweakstreet.library.steps.map.calculator_c9c61b99-ba1b-42bd-9c9b-4604a6b70f7a",
+      "fromGate": "yes",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "16febf2a-c30c-4dc6-b890-0a841b6c8763",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.map.calculator_c9c61b99-ba1b-42bd-9c9b-4604a6b70f7a",
+      "toStep": "com.twineworks.tweakstreet.library.steps.flatmap.getitems_f0b3d8ef-58ee-4385-9c50-d476aaadd096",
+      "fromGate": "out",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "aa8bb737-16dc-4d74-b5cd-3e64ce10b606",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.bool.filter_996973ff-510e-4915-a268-c4ada982efa1",
+      "toStep": "com.twineworks.tweakstreet.library.steps.bool.filter_d96cd101-17b1-4f9b-b6fa-94390d92196b",
+      "fromGate": "yes",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "de6c8c4e-5ffa-4e5b-b526-1f0a4a0126aa",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.bool.filter_d96cd101-17b1-4f9b-b6fa-94390d92196b",
+      "toStep": "com.twineworks.tweakstreet.library.steps.map.movefiles_d2287f16-211c-49b5-bc57-6ec46f4464c6",
+      "fromGate": "yes",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    },
+    {
+      "id": "9ae9ba23-29d1-46ec-900f-84962b83bcc0",
+      "fromStep": "com.twineworks.tweakstreet.library.steps.bool.filter_d96cd101-17b1-4f9b-b6fa-94390d92196b",
+      "toStep": "com.twineworks.tweakstreet.library.steps.map.dummy_81d91015-838a-4443-899f-dd33c9938bb1",
+      "fromGate": "no",
+      "toGate": "in",
+      "disabled": false,
+      "partitioner": {
+        "widgetType": "expression/code",
+        "widgetData": {
+          "text": ""
+        },
+        "code": "nil"
+      }
+    }
+  ]
+}

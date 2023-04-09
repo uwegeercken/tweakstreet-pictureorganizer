@@ -1,12 +1,12 @@
 {
   "type": "data-flow",
-  "appVersion": "1.21.0",
+  "appVersion": "1.20.0",
   "properties": {
     "meta": {
       "comment": {
         "markdown": {
           "text": {
-            "text": "### Flow to organize pictures into defined folders\n\nThe flow organizes pictures into folders according to the date when the picture was taken. Additionally, known reference dates are matched so that relevant pictures are output with a descriptive folder name.\n\nData is queried from an Apache Drill instance. Drill has a plugin to query the metadata of picture files of various formats.\n\nFrom the metadata of the pictures the date of when the shot was taken is extracted. It is then compared against reference dates in a separate files (in Json format). If a reference date matches the date when the picture was taken, the picture is output to a folder coresponding to the year the picture was taken plus the description and reference of the matched item.\n\nIf no reference matches the date the picture was taken, the picture is output to a folder corresponding to the year, month and day of month of the picture. If no date of when the picture was taken\ncan be extracted from the picture metadata, then the file system date of the picture is used.\n\nIf the fileOperation variable is set to 'move' and the moveOnlyFilesWithReferences variable is set to 'true', only files which have a match in the reference dates are moved to the output folder. All other files remain in the origin folder. This way one can incrementally add reference dates and\nrepeatedly run the flow to output the files until all files have a reference date. \n\nThe file date may come in different formats depending on the Aprache Drill settings and your local datetime format. The same might be true for the date from the picture metadata. You may need\nto adjust the queryFileDateTimePattern variable or the pictureMetadataDatePattern variable.\n\n__Note__: To run the dataflow, Apache Drill needs to be installed, configured and running. Drill itself also requires an instance of Apache Zookeeper running.",
+            "text": "### Flow to organize pictures into defined folders\n\nThe flow organizes pictures into folders according to the date when the picture was taken. Additionally, known reference dates are matched so that relevant pictures are output with a descriptive folder name.\n\nData is queried from an Apache Drill instance. Drill has a plugin to query the metadata of picture files of various formats.\n\nFrom the metadata of the pictures the date of when the shot was taken is extracted. It is then compared against reference dates in a separate files (in Json format). If a reference date matches the date when the picture was taken, the picture is output to a folder coresponding to the year the picture was taken plus the description and reference of the matched item.\n\nIf no reference matches the date the picture was taken, the picture is output to a folder corresponding to the year, month and day of month of the picture. If no date of when the picture was taken\ncan be extracted from the picture metadata, then the file system date of the picture is used.\n\nIf the fileOperation variable is set to 'move' and the moveOnlyFilesWithReferences variable is set to 'true', only files which have a match in the reference dates are moved to the output folder. All other files remain in the origin folder. This way one can incrementally add reference dates and\nrepeatedly run the flow to output the files until all files have a reference date. \n\nThe file date may come in different formats depending on the Aprache Drill settings and your local datetime format. The same might be true for the date from the picture metadata. You may need\nto adjust the queryFileDateTimePattern variable or the pictureMetadataDatePattern variable.\n\nIn the drill dfs storage plugin add an entry:\n\n\n    \"externalimages\": {\n      \"location\": \"/run/media/uwe/external1/Bilder\",\n      \"writable\": false,\n      \"defaultInputFormat\": \"image\",\n      \"allowAccessOutsideWorkspace\": false\n    }\n\n\n__Note__: To run the dataflow, Apache Drill needs to be installed, configured (dfs storage) and running. Drill itself also requires an instance of Apache Zookeeper running.",
             "syntax": "markdown",
             "size": {
               "width": "100%",
@@ -17,7 +17,7 @@
             "width": null,
             "height": 299
           },
-          "view": "edit"
+          "view": "split"
         },
         "editor": {
           "collapsed": false
@@ -114,9 +114,9 @@
               "widgetType": "expression/string",
               "widgetData": {
                 "interpolation": true,
-                "text": "dfs.images.`/2019/chris_in_hohn/*`"
+                "text": "dfs.externalimages.`/organizertest/*`"
               },
-              "code": "'dfs.images.`/2019/chris_in_hohn/*`'"
+              "code": "'dfs.externalimages.`/organizertest/*`'"
             }
           },
           {
@@ -2451,7 +2451,7 @@
           "comment": {
             "markdown": {
               "text": {
-                "text": "### Filename for files with references\n\nThe target folder is constructed by combining:\n- output folder from flow variable\n- the year the picture was taken\n- the description attrbiute of the reference\n\n",
+                "text": "### Filename for files with references\n\nThe target folder is constructed by combining:\n- output folder from flow variable\n- the year the picture was taken\n- the description attribute of the reference\n\n",
                 "syntax": "markdown",
                 "size": {
                   "width": "100%",
